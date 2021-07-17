@@ -1,0 +1,281 @@
+########################################
+## Document version: 1.7
+## Playbook to deploy ELK stack with
+## 3-node ElasticSearch cluster
+## and Zabbix agent
+## Prepared by: Mohamed Roushdy
+## Email: info@arabitnetwork.com
+## Website: arabitnetwork.com
+########################################
+
+################################
+## Play01 - Preparing all nodes
+################################
+
+---
+
+- name: ELK-stack deployment - prepare fundamentals for all nodes
+  hosts: all
+  
+  tasks:
+  - name: add hostnames to "hosts" file
+    blockinfile:
+      path: /etc/hosts
+      block: |
+        192.168.70.141  jump  jump.aitn.local
+        192.168.70.151  es-node-01  es-node-01.aitn.local
+        192.168.70.152  es-node-02  es-node-02.aitn.local
+        192.168.70.153  es-node-03  es-node-03.aitn.local
+        192.168.70.154  kibana01  kibana01.aitn.local
+        192.168.70.155  logstash01  logstash01.aitn.local
+
+
+## remove swap from OS startup permanently
+  - name: stop memory swap
+    command: swapoff -a
+
+  - name: backup 'fstab' file
+    command: cp -f /etc/fstab /etc/fstab.bak
+
+  - name: remove "swap" entry form fstab file
+    command: sed -i '/swap/d' /etc/fstab
+
+
+## Disable SELINUX
+  - name: Put SELinux in permissive mode, logging actions that would be blocked.
+    selinux:
+      policy: targeted
+      state: permissive
+
+
+  - name: disable firewall service
+    service:
+      name: firewalld
+      state: stopped
+      enabled: no
+
+  - name: Install JAVA and netstat
+    yum:
+      name: ['java', 'net-tools']
+      state: present
+
+
+## Install & Configure Zabbix Agent
+
+  - name: Set Zabbix repository
+    yum:
+      name: https://repo.zabbix.com/zabbix/5.4/rhel/7/x86_64/zabbix-release-5.4-1.el7.noarch.rpm
+      state: present
+
+  - name: Install Zabbix Agent
+    yum:
+      name: zabbix-agent
+      state: present
+
+## Set Zabbix-agent config file  ##
+  - name: update Zabbix server IP
+    ansible.builtin.lineinfile:
+      path: /etc/zabbix/zabbix_agentd.conf
+      regexp: '^Server='
+      line: Server= {{ zabbix_server }}
+
+  - name: Update client hostname
+    ansible.builtin.lineinfile:
+      path: /etc/zabbix/zabbix_agentd.conf
+      regexp: '^Hostname'
+      line: Hostname= {{ ansible_facts.hostname }}
+
+
+  - name: start Zabbix-agent
+    service:
+      name: zabbix-agent
+      state: started
+      enabled: yes
+
+
+
+########################################
+## Play02 - Deploy ElasticSearch cluster
+########################################
+
+- name: ES Cluster Deployment - playbook
+  hosts: es-nodes 
+  tasks:
+
+  - name: Instrall ElasticSearch binaries
+    yum:
+      name: https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-7.5.1-x86_64.rpm
+      state: present
+
+
+## Configure "elasticsearch.yml" configuration file
+
+  - name: backup "elasticsearch.yml" file
+    command: cp /etc/elasticsearch/elasticsearch.yml /etc/elasticsearch/elasticsearch.yml.bak
+
+  - name: setting custom configuration in 'elasticsearch.yml' file
+    blockinfile:
+      path: /etc/elasticsearch/elasticsearch.yml
+      block: |
+        cluster.name: "{{ es_cluster_name }}"
+        network.host: {{ ansible_facts.ens33.ipv4.address }}
+        discovery.seed_hosts: ["{{ node1 }}", "{{ node2 }}", "{{ node3 }}"]
+        cluster.initial_master_nodes: ["{{ node1 }}", "{{ node2 }}", "{{ node3 }}" ]
+        node.master: true
+        node.voting_only: false
+        node.data: true
+        node.ingest: true
+        node.ml: false
+        xpack.ml.enabled: true
+        cluster.remote.connect: false
+        xpack.monitoring.collection.enabled: true
+        xpack.monitoring.elasticsearch.collection.enabled: true
+
+
+  - name: start and enable ElasticSearch service
+    service:
+      name: elasticsearch
+      state: started
+      enabled: yes
+
+  - name: print service status
+    command: systemctl status elasticsearch
+    register: out
+
+  - debug: var=out.stdout_lines
+
+
+
+######################################
+## Play03 - Preparing KIBANA INSTANCE
+######################################
+
+
+- name: Kibana-node prep. playbook
+  hosts: kibana
+  tasks:
+
+  - name: install kibana binaries
+    yum:
+      name: https://artifacts.elastic.co/downloads/kibana/kibana-7.5.1-x86_64.rpm
+      state: present
+
+  - name: configure parameters in "kibana.yml" file
+    blockinfile:
+      path: /etc/kibana/kibana.yml
+      block: |
+        server.port: 5601
+        server.host: {{ ansible_facts.ens33.ipv4.address }}
+        server.name: {{ ansible_facts.hostname }}
+        elasticsearch.hosts: ["http://{{ node1 }}", "http://{{ node2 }}:9200", "http://{{ node3 }}:9200" ]
+
+
+  - name: start kibana service
+    service:
+      name: kibana
+      state: started
+      enabled: yes
+
+  - name: print service status
+    command: systemctl status kibana
+    register: out
+
+  - debug: var=out.stdout_lines
+
+
+
+##################################
+### Play04 - Deploy LogStash node
+##################################
+
+
+- name: Deploy Logstash node
+  hosts: logstash
+  tasks:
+
+  - name: create YUM repo for Logstash
+    copy:
+     dest: /etc/yum.repos.d/logstash.repo
+     content: |
+       [logstash-7.x]
+       name=Elastic repository for 7.x packages
+       baseurl=https://artifacts.elastic.co/packages/7.x/yum
+       gpgcheck=1
+       gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+       enabled=1
+       autorefresh=1
+       type=rpm-md
+
+  - name: install Logstash
+    yum:
+      name: logstash
+      state: present
+
+  - name: copy the custom config file to LogStash server
+    copy:
+      src: my.conf
+      dest: /etc/logstash/conf.d/
+
+  - name: configure "logstash.yml" file
+    blockinfile:
+      path: /etc/logstash/logstash.yml
+      block: |
+        node.name: {{ ansible_facts.hostname }}
+        path.data: /var/lib/logstash
+        path.config: /etc/logstash/conf.d/*.conf
+        path.logs: /var/log/logstash
+        xpack.monitoring.enabled: true
+        xpack.monitoring.elasticsearch.username: 'logstash_system'
+        xpack.monitoring.elasticsearch.password: 'Passw0rd'
+        xpack.monitoring.elasticsearch.hosts: [ "http://{{ node1 }}:9200", "http://{{ node2 }}:9200", "http://{{ node3 }}:9200" ]
+
+
+  - name: start LogStash service
+    service:
+      name: logstash
+      state: started
+      enabled: yes
+
+
+ ## Print the status of the servic
+  - name: print service status
+    command: systemctl status logstash
+    register: out
+
+  - debug: var=out.stdout_lines
+
+
+
+##################################################
+## Play05 - Monitor the status of ElasticSearch
+## cluster nodes
+##################################################
+
+
+- name: Check the status of ElasticSearch cluster nodes
+  hosts: es-node-01
+  tasks:
+
+  - name: Check the status of ES-cluster nodes
+    command: curl -XGET {{ ansible_facts.hostname }}:9200/_cat/nodes
+    register: curl
+  - debug: var=curl.stdout_lines
+
+
+  - name: Check the status of each node in - ES-NODE-01
+    command: curl -XGET "{{ node1 }}":9200/_cluster/health?pretty
+    register: curl
+  - debug: var=curl.stdout_lines
+
+
+  - name: Check the status of each node in -  ES-NODE-02
+    command: curl -XGET "{{ node2 }}":9200/_cluster/health?pretty
+    register: curl
+  - debug: var=curl.stdout_lines
+
+
+  - name: Check the status of each node in - ES-NODE-03
+    command: curl -XGET "{{ node3 }}":9200/_cluster/health?pretty
+    register: curl
+  - debug: var=curl.stdout_lines
+
