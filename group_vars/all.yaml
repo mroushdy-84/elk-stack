@@ -1,0 +1,5 @@
+zabbix_server: 192.168.70.143
+node1: 192.168.70.151
+node2: 192.168.70.152
+node3: 192.168.70.153
+es_cluster_name: es-aitn-cluster
