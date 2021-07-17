@@ -67,7 +67,7 @@ This playbook file contains five different plays, and here's a quick description
 	
 Important note: the playbook file contains a variable that grabs the IP address of the nodes. Please make sure to modify that variable to specify the NIC device name in your operating system. The variable is: {{ ansible_facts.ens33.ipv4.address }}
 
-- my.conf: this file defines INPUT/FILTER/OUTPUT parameters and the listening port of LogStash server. You can rename this file according to your preferences.
+- my.conf: this file defines INPUT/FILTER/OUTPUT parameters and the listening port of LogStash server. You can rename this file according to your preferences. The automation script will be copying this file from the script directory to all destined nodes.
 
 Running the script:
 ===================
