@@ -36,6 +36,14 @@ Project content files:
 - elk-stack-zabbix-v1.7.yaml
 - my.conf  -------> LogStash custom config file
 
+What do you need to customize first?
+===================================
+- hosts.ini file: edit the file according to your preferences
+- all.yaml: define the variables according to your preferences
+- elk-stack-zabbix-v1.7.yaml: edit host IP address variable "{{ ansible_facts.ens33.ipv4.address }}", replace the NIC device name "ens33" with the NIC device name of your operating system
+- my.conf: in the "output" section, enter the IPs of the Elasticsearch indexer servers
+
+
 How to use the script:
 ======================
 - hosts.ini ----------> this file contains a list of the inventory, and it must be located under the same path with the ansible playbook file.
